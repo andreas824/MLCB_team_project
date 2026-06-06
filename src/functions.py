@@ -63,7 +63,58 @@ def build_condition_map(gse_female, gse_male):
         grp = next((c for c in chars if c.lower().startswith('group')), '')
         cond[label] = 'MDD' if ('mdd' in grp.lower() or 'depress' in grp.lower()) else 'Control'
 
+    # M24 and M25 in GSE144136 metadata are the same physical donor
+    # (combined matrix labels them M24 + M24_2, merged to M24 by _normalize_donor).
+    # Drop the redundant M25 key so the map has exactly 71 donors.
+    cond.pop('M25', None)
+
     return cond
+
+
+def _read_mtx_streaming(mtx_fn, chunksize=5_000_000):
+    """Read a gzipped MatrixMarket file into a CSR matrix (cells x genes)
+    without blowing up memory.
+
+    The .mtx stores genes x cells with 1-based (row, col, value) triplets.
+    We read the triplets in chunks via pandas, accumulate COO arrays, and
+    build the transposed (cells x genes) CSR at the end.
+    """
+    # First non-comment line after the %%MatrixMarket header gives dimensions.
+    with gzip.open(mtx_fn, 'rt') as f:
+        for line in f:
+            if line.startswith('%'):
+                continue
+            n_genes, n_cells, nnz = map(int, line.split())
+            break
+
+    # Read the triplet body in chunks. skiprows covers header + dim line.
+    # Count comment lines so skiprows is exact.
+    n_comment = 0
+    with gzip.open(mtx_fn, 'rt') as f:
+        for line in f:
+            if line.startswith('%'):
+                n_comment += 1
+            else:
+                break
+    skip = n_comment + 1   # + the dimension line
+
+    rows = np.empty(nnz, dtype=np.int32)   # gene indices
+    cols = np.empty(nnz, dtype=np.int32)   # cell indices
+    vals = np.empty(nnz, dtype=np.float32)
+    pos = 0
+    reader = pd.read_csv(mtx_fn, sep=r'\s+', header=None, skiprows=skip,
+                         dtype={0: np.int32, 1: np.int32, 2: np.float32},
+                         chunksize=chunksize, compression='gzip')
+    for chunk in reader:
+        k = len(chunk)
+        rows[pos:pos+k] = chunk[0].values - 1   # 1-based -> 0-based
+        cols[pos:pos+k] = chunk[1].values - 1
+        vals[pos:pos+k] = chunk[2].values
+        pos += k
+
+    # Build COO as genes x cells, then transpose to cells x genes CSR.
+    coo = sp.coo_matrix((vals, (rows, cols)), shape=(n_genes, n_cells))
+    return coo.T.tocsr()
 
 
 def load_dataset(raw_dir, condition_map):
@@ -78,10 +129,8 @@ def load_dataset(raw_dir, condition_map):
     cells_fn = os.path.join(gse_dir, 'GSE213982_combined_counts_matrix_cells_columns.csv.gz')
     genes_fn = os.path.join(gse_dir, 'GSE213982_combined_counts_matrix_genes_rows.csv.gz')
 
-    # --- matrix: stored genes x cells, MatrixMarket. Read then transpose. ---
-    with gzip.open(mtx_fn, 'rb') as f:
-        mat = sio.mmread(f)              # scipy COO, genes x cells
-    mat = sp.csr_matrix(mat).T.tocsr()   # -> cells x genes, CSR
+    # --- matrix: streaming read to stay under free-Colab RAM ---
+    mat = _read_mtx_streaming(mtx_fn)    # cells x genes, CSR
 
     # --- genes (rows of original matrix) ---
     genes = pd.read_csv(genes_fn)['x'].astype(str).values
