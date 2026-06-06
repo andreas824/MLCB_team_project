@@ -185,3 +185,53 @@ def normalize(adata, target_sum=1e4):
     sc.pp.normalize_total(adata, target_sum=target_sum)
     sc.pp.log1p(adata)
     return adata
+
+
+def deg_sanity_check(adata, cluster_col='cell_type_fine',
+                     targets=(('Mic1', 'female'), ('ExN10_L46', 'male')),
+                     n_top=25):
+    """Per-cluster Wilcoxon DEG (MDD vs Control), within one sex.
+
+    For each (cluster, sex) target, subset to that cluster's nuclei of that
+    sex, then rank genes by Wilcoxon test between MDD and Control nuclei.
+    This is a nucleus-level sanity check (the proposal's 'Wilcoxon per
+    cluster'), confirming the paper's signal exists in our data — NOT the
+    donor-level pseudobulk statistics the authors used.
+
+    Returns {('Mic1','female'): DataFrame, ...} with top DEGs per target.
+    Requires .X to hold normalized+log values.
+    """
+    import scanpy as sc
+    import pandas as pd
+
+    results = {}
+    for cluster, sex in targets:
+        mask = (adata.obs[cluster_col] == cluster) & (adata.obs['sex'] == sex)
+        sub = adata[mask].copy()
+
+        n_mdd  = (sub.obs['condition'] == 'MDD').sum()
+        n_ctrl = (sub.obs['condition'] == 'Control').sum()
+        print(f"\n=== {cluster} ({sex}) ===")
+        print(f"  nuclei: {sub.n_obs}  |  MDD: {n_mdd}, Control: {n_ctrl}")
+        print(f"  donors: {sub.obs['donor_id'].nunique()}")
+
+        if n_mdd < 3 or n_ctrl < 3:
+            print("  SKIP: too few nuclei in one group")
+            results[(cluster, sex)] = None
+            continue
+
+        # Wilcoxon: MDD vs Control, within this cluster+sex
+        sc.tl.rank_genes_groups(sub, groupby='condition', groups=['MDD'],
+                                reference='Control', method='wilcoxon')
+        df = sc.get.rank_genes_groups_df(sub, group='MDD')
+        # df columns: names, scores, logfoldchanges, pvals, pvals_adj
+        df = df.sort_values('pvals_adj').reset_index(drop=True)
+
+        n_sig = (df['pvals_adj'] < 0.05).sum()
+        print(f"  significant DEGs (padj<0.05): {n_sig}")
+        print(f"  top {min(n_top,len(df))} genes:",
+              ', '.join(df['names'].head(n_top).tolist()))
+
+        results[(cluster, sex)] = df.head(n_top)
+
+    return results
