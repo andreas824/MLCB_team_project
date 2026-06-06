@@ -162,3 +162,26 @@ def load_dataset(raw_dir, condition_map):
     adata.layers['counts'] = adata.X.copy()   # preserve raw counts before any normalization
 
     return adata
+
+
+def normalize(adata, target_sum=1e4):
+    """Library-size normalize + log transform.
+
+    Raw counts must already be preserved in .layers['counts'] (done by
+    load_dataset). This transforms .X in place to normalized+log values,
+    suitable for DEG testing and visualization. Raw counts stay untouched
+    in the layer for downstream pseudobulk.
+
+    - normalize_total: scale each nucleus to the same total (counts per 1e4),
+      removing sequencing-depth differences between nuclei.
+    - log1p: log(1+x), compressing the dynamic range.
+    """
+    import scanpy as sc
+
+    # Safety: make sure raw counts are stashed before we overwrite .X
+    if 'counts' not in adata.layers:
+        adata.layers['counts'] = adata.X.copy()
+
+    sc.pp.normalize_total(adata, target_sum=target_sum)
+    sc.pp.log1p(adata)
+    return adata
