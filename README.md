@@ -78,7 +78,7 @@ CHECKPOINT_DIR = os.path.join(PROJECT_ROOT, 'data', 'checkpoints')
 for d in (RAW_DIR, CHECKPOINT_DIR):
     os.makedirs(d, exist_ok=True)
 
-REPO_URL = 'https://github.com/<username>/MLCB_team_project.git'
+REPO_URL = 'https://github.com/andreas824/MLCB_team_project.git'
 REPO_DIR = '/content/MLCB_team_project'
 if not os.path.exists(REPO_DIR):
     !git clone {REPO_URL} {REPO_DIR}
