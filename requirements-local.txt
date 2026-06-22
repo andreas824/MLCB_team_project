@@ -1,0 +1,14 @@
+# Local environment (e.g. Apple Silicon M3) for running Phase B Step 3
+# off the per-donor parquet, without Colab. Needs Python >= 3.10.
+#
+#   conda create -n mlcb python=3.11 -y && conda activate mlcb
+#   pip install -r requirements-local.txt
+#   python src/phaseB_step3_local.py --checkpoint-dir data/checkpoints --elbow
+#
+# Versions are left open; for exact Colab parity, `pip freeze | grep -Ei
+# 'liana|cell2cell|tensorly|scanpy'` in Colab and pin those here.
+liana
+cell2cell
+pyarrow
+pandas
+scipy
