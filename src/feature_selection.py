@@ -158,27 +158,52 @@ class MRMRSelector(BaseEstimator, TransformerMixin):
 
 class VarianceTopK(BaseEstimator, TransformerMixin):
     """
-    Keep the top-N features by training-set variance.
+    Keep the top-N features by training-set variance, plus any protected
+    features that must always pass through.
 
     A fast, unsupervised first-stage filter that shrinks a very wide
     feature matrix to a tractable width before mRMR. Unsupervised (variance
     only, never the label), so it is a mild operation; still fitted in-fold
     for strict leakage safety.
 
+    Protected features bypass the variance ranking entirely and are always
+    retained. This matters when feature sets are on different scales: e.g.
+    pseudobulk log-CPM genes have far larger variance than the communication
+    factor loadings, so without protection a plain variance filter would
+    silently drop every factor from a combined gene+factor matrix.
+
     Parameters
     ----------
     n_top : int, default 1000
-        Number of highest-variance features to keep. If the input has fewer
-        columns, all are kept.
+        Number of highest-variance NON-protected features to keep. If fewer
+        non-protected columns exist, all are kept.
+    protect : sequence of str or None, default None
+        Column names that must always be retained, regardless of variance.
+        Matched by name (requires a DataFrame). They are kept in addition
+        to the n_top variance-ranked features.
+    protect_prefixes : sequence of str or None, default None
+        Convenience: any column whose name starts with one of these
+        prefixes is protected. Useful for protecting a whole block (e.g.
+        all 'Factor_' columns) without listing each name.
 
     Attributes (after fit)
     ----------------------
     selected_features_ : list[str]
-        Names of the retained columns (when fitted on a DataFrame).
+        Names of the retained columns (protected + top variance), in
+        original column order.
     """
 
-    def __init__(self, n_top: int = 1000):
+    def __init__(self, n_top: int = 1000, protect=None, protect_prefixes=None):
         self.n_top = n_top
+        self.protect = protect
+        self.protect_prefixes = protect_prefixes
+
+    def _is_protected(self, name: str) -> bool:
+        if self.protect is not None and name in set(self.protect):
+            return True
+        if self.protect_prefixes is not None:
+            return any(str(name).startswith(p) for p in self.protect_prefixes)
+        return False
 
     def fit(self, X, y=None):
         if isinstance(X, pd.DataFrame):
@@ -188,12 +213,23 @@ class VarianceTopK(BaseEstimator, TransformerMixin):
             self.feature_names_in_ = [f'f{i}' for i in range(X.shape[1])]
             variances = np.var(np.asarray(X), axis=0, ddof=1)
 
-        n_keep = min(self.n_top, len(self.feature_names_in_))
-        # indices of the n_keep largest variances
-        top_idx = np.argsort(variances)[::-1][:n_keep]
-        top_idx = np.sort(top_idx)  # keep original column order
-        self.support_idx_ = top_idx
-        self.selected_features_ = [self.feature_names_in_[i] for i in top_idx]
+        names = self.feature_names_in_
+        protected_idx = [i for i, nm in enumerate(names) if self._is_protected(nm)]
+        protected_set = set(protected_idx)
+
+        # rank only the non-protected features by variance
+        candidate_idx = np.array([i for i in range(len(names))
+                                  if i not in protected_set])
+        n_keep = min(self.n_top, len(candidate_idx))
+        if len(candidate_idx) > 0:
+            order = candidate_idx[np.argsort(variances[candidate_idx])[::-1]]
+            top_idx = list(order[:n_keep])
+        else:
+            top_idx = []
+
+        keep = sorted(set(top_idx) | protected_set)  # union, original order
+        self.support_idx_ = np.array(keep, dtype=int)
+        self.selected_features_ = [names[i] for i in keep]
         return self
 
     def transform(self, X):
