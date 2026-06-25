@@ -85,7 +85,7 @@ class MRMRSelector(BaseEstimator, TransformerMixin):
     """
 
     def __init__(self, k: int = 7, relevance: str = 'mi',
-                 redundancy: str = 'c', n_jobs: int = -1,
+                 redundancy: str = 'c', n_jobs: int = 1,
                  random_state: int = 42):
         self.k = k
         self.relevance = relevance

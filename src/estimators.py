@@ -128,7 +128,7 @@ def lda_space(trial) -> dict:
 
 def rf_fixed_params() -> dict:
     return {
-        'n_jobs': -1,
+        'n_jobs': 1,
         'random_state': RANDOM_STATE,
         'class_weight': 'balanced',
     }
@@ -138,8 +138,8 @@ def rf_space(trial) -> dict:
     """
     RF Optuna space, sized for ~57 training donors per fold.
 
-    n_estimators     : [100, 400] -- diminishing returns past a few hundred
-                       trees at this sample size.
+    n_estimators     : [100, 300] -- a few hundred trees saturate accuracy
+                       at this sample size; more only adds runtime.
     max_depth        : [2, 6] -- primary regularizer. Shallow trees are
                        essential with so few donors per fold.
     min_samples_leaf : [2, 12] -- leaves below ~2-3 donors are statistically
@@ -148,7 +148,7 @@ def rf_space(trial) -> dict:
     """
     return {
         **rf_fixed_params(),
-        'n_estimators':     trial.suggest_int('n_estimators', 100, 400, step=50),
+        'n_estimators':     trial.suggest_int('n_estimators', 100, 300, step=50),
         'max_depth':        trial.suggest_int('max_depth', 2, 6),
         'min_samples_leaf': trial.suggest_int('min_samples_leaf', 2, 12),
         'max_features':     trial.suggest_categorical('max_features',
@@ -164,7 +164,7 @@ def xgb_fixed_params() -> dict:
         'eval_metric':  'logloss',
         'verbosity':    0,
         'random_state': RANDOM_STATE,
-        'n_jobs':       -1,
+        'n_jobs':       1,
     }
 
 
