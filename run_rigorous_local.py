@@ -268,6 +268,16 @@ def build_tensor(liana_res):
     s_idx = df[send_col].astype(str).map(si).values
     r_idx = df[recv_col].astype(str).map(ri).values
     vals  = df[score_col].astype(float).values
+    if score_col == 'magnitude_rank':
+        # liana's to_tensor_c2c applies inverse_fun = -log10(x + eps) to the
+        # score BEFORE building the tensor (see liana _constants.DefaultValues).
+        # magnitude_rank is a rank in (0, 1] where small = strong, so this both
+        # flips the orientation (large = strong) and reshapes it non-linearly.
+        # Phase B used this default; raw magnitude_rank left the in-fold factors
+        # INVERTED + non-linearly off vs the frozen phaseB_donor_factors. With
+        # this transform the diagnostic reproduces them at median |r| 0.97
+        # (Factor 4 |r| 0.95). See diagnose_tensor_transform.py.
+        vals = -np.log10(vals + np.finfo(float).eps)
     T[d_idx, l_idx, s_idx, r_idx] = vals
     return T, donors
 
