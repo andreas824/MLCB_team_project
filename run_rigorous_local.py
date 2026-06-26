@@ -65,8 +65,9 @@ def main():
     ap.add_argument('--n-jobs', type=int, default=4,
                     help='parallel jobs for estimators (use ~half your threads)')
     ap.add_argument('--seed', type=int, default=42)
-    ap.add_argument('--n-iter-max', type=int, default=200,
-                    help='max iterations for the per-fold CP decomposition')
+    ap.add_argument('--n-iter-max', type=int, default=50,
+                    help='max iterations for the per-fold CP decomposition '
+                         '(50 is plenty; CP converges well before then)')
     args = ap.parse_args()
 
     # local imports (after warnings/env are set)
@@ -236,6 +237,19 @@ def build_tensor(liana_res):
     send_col = 'source' if 'source' in df.columns else 'sender'
     recv_col = 'target' if 'target' in df.columns else 'receiver'
     score_col = 'magnitude_rank' if 'magnitude_rank' in df.columns else 'lr_means'
+
+    # --- reproduce liana's to_tensor_c2c(how='outer_cells') filtering -------
+    # 'outer_cells' keeps only LR pairs present across ALL donors (samples).
+    # The per-donor LIANA table is dense within each donor's detected pairs;
+    # restricting to pairs seen in every donor reduces 4471 -> the Phase B
+    # 1650 pairs, matching the tensor the frozen factors were fit on.
+    n_donors_total = df[sample_col].nunique()
+    per_lr_donors = df.groupby('_lr')[sample_col].nunique()
+    keep_lrs = set(per_lr_donors[per_lr_donors == n_donors_total].index)
+    n_before = df['_lr'].nunique()
+    df = df[df['_lr'].isin(keep_lrs)].copy()
+    print(f'  LR pairs: {n_before} raw -> {len(keep_lrs)} present in all '
+          f'{n_donors_total} donors (outer_cells filter)')
 
     donors = sorted(df[sample_col].astype(str).unique())
     lrs    = sorted(df['_lr'].unique())

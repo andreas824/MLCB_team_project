@@ -45,6 +45,20 @@ import tensorly as tl
 from tensorly.decomposition import non_negative_parafac
 
 
+# Module-level cache of CP decompositions, keyed by the exact set of train
+# donors (plus rank/seed). The rnCV machinery deepcopies the projector for
+# every pipeline, so an instance attribute would not be shared -- but inside
+# one outer fold every inner trial refits on the SAME train donors. Caching
+# here collapses those ~60 identical refits per outer fold into one, the
+# single biggest speedup for the rigorous run. The cache holds only a handful
+# of entries (one per distinct train split) so memory is not a concern.
+_CP_CACHE: dict = {}
+
+
+def _cp_cache_clear():
+    _CP_CACHE.clear()
+
+
 class TensorFactorProjector(BaseEstimator, TransformerMixin):
     """
     Leakage-safe communication factors via in-fold tensor factorization.
@@ -77,12 +91,15 @@ class TensorFactorProjector(BaseEstimator, TransformerMixin):
     """
 
     def __init__(self, tensor, donor_order, rank: int = 5,
-                 random_state: int = 0, n_iter_max: int = 200):
+                 random_state: int = 0, n_iter_max: int = 50,
+                 tol: float = 1e-6, use_cache: bool = True):
         self.tensor = tensor
         self.donor_order = donor_order
         self.rank = rank
         self.random_state = random_state
         self.n_iter_max = n_iter_max
+        self.tol = tol
+        self.use_cache = use_cache
         self._pos_of = {d: i for i, d in enumerate(donor_order)}
 
     # -- helpers ---------------------------------------------------------
@@ -116,23 +133,32 @@ class TensorFactorProjector(BaseEstimator, TransformerMixin):
 
     def fit(self, X, y=None):
         train_pos = self._positions(X)
-        sub = self.tensor[train_pos].astype(float)        # (n_tr, d1, d2, d3)
 
-        # weight mask: 1 where observed, 0 where NaN (masked slice)
-        mask = (~np.isnan(sub)).astype(float)
-        sub_filled = np.nan_to_num(sub, nan=0.0)
+        # cache key: exact train-donor set (order-independent) + rank + seed.
+        # Within one outer fold, all inner trials hit the same key, so the
+        # expensive CP runs once instead of ~60 times.
+        key = (frozenset(train_pos), self.rank, self.random_state,
+               self.n_iter_max)
+        if self.use_cache and key in _CP_CACHE:
+            self.factors_ = _CP_CACHE[key]
+        else:
+            sub = self.tensor[train_pos].astype(float)    # (n_tr, d1, d2, d3)
+            mask = (~np.isnan(sub)).astype(float)         # 1 obs, 0 masked
+            sub_filled = np.nan_to_num(sub, nan=0.0)
+            tl.set_backend('numpy')
+            weights, factors = non_negative_parafac(
+                tl.tensor(sub_filled),
+                rank=self.rank,
+                mask=tl.tensor(mask),
+                init='random',
+                random_state=self.random_state,
+                n_iter_max=self.n_iter_max,
+                tol=self.tol,
+            )
+            self.factors_ = [np.asarray(f) for f in factors]
+            if self.use_cache:
+                _CP_CACHE[key] = self.factors_
 
-        tl.set_backend('numpy')
-        weights, factors = non_negative_parafac(
-            tl.tensor(sub_filled),
-            rank=self.rank,
-            mask=tl.tensor(mask),
-            init='random',
-            random_state=self.random_state,
-            n_iter_max=self.n_iter_max,
-        )
-        # factors: [A (n_tr x R), B (d1 x R), C (d2 x R), D (d3 x R)]
-        self.factors_ = [np.asarray(f) for f in factors]
         self.design_ = self._build_design()
         self.feature_names_out_ = [f'Factor_{r+1}' for r in range(self.rank)]
         return self
