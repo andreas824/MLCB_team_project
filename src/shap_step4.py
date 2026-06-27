@@ -30,6 +30,8 @@ warnings.filterwarnings('ignore')
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--checkpoint-dir', default='data/checkpoints')
+    ap.add_argument('--fig-dir', default='data/checkpoints/phaseC_results_rigorous',
+                    help='where to write the SHAP beeswarm PNGs')
     args = ap.parse_args()
 
     import numpy as np
@@ -131,6 +133,49 @@ def main():
     print(f'  {hyp} mean|SHAP|  female={rows["female"][hi]:.3f}  '
           f'male={rows["male"][hi]:.3f}  '
           f'-> {"comparable across sexes" if min(rows["female"][hi],rows["male"][hi])/max(rows["female"][hi],rows["male"][hi]+1e-9) > 0.5 else "asymmetric across sexes"}')
+
+    # =====================================================================
+    # 3. SHAP beeswarm plots (overall + per sex) — distribution of each
+    #    factor's signed log-odds contribution across donors. Colour = factor
+    #    value (red high / blue low), so you can read directionality, not just
+    #    magnitude: e.g. high Factor 4 pushing toward MDD shows as red dots on
+    #    the positive-SHAP side.
+    # =====================================================================
+    print('\n' + '=' * 68)
+    print('3. SHAP beeswarm plots')
+    print('=' * 68)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    os.makedirs(args.fig_dir, exist_ok=True)
+    short = [f.replace(' ', '') for f in factors]            # 'Factor4'
+    hi_lab = short[factors.index(hyp)]
+
+    def beeswarm(mask, tag, title):
+        n = int(mask.sum())
+        if n < 3 or len(np.unique(y[mask])) < 2:
+            print(f'  {tag:8s} skipped (n={n}, needs >=3 donors and both classes)')
+            return
+        plt.figure()
+        # order='importance' default; keep all 5 factors so the panel is comparable
+        shap.summary_plot(sv[mask], Xs[mask], feature_names=short,
+                          show=False, sort=True, plot_size=(7, 3.5))
+        ax = plt.gca()
+        # highlight the hypothesis factor tick label
+        for t in ax.get_yticklabels():
+            if t.get_text() == hi_lab:
+                t.set_color('crimson'); t.set_fontweight('bold')
+        ax.set_title(f'{title}  (n={n}, MDD={int(y[mask].sum())})  '
+                     f'— red label = hypothesis {hyp}', fontsize=9)
+        out = os.path.join(args.fig_dir, f'step4_shap_beeswarm_{tag}.png')
+        plt.savefig(out, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f'  wrote {out}')
+
+    beeswarm(np.ones(len(df), bool), 'overall', 'LR linear-SHAP — all donors')
+    beeswarm(sex == 'female', 'female', 'LR linear-SHAP — female donors')
+    beeswarm(sex == 'male', 'male', 'LR linear-SHAP — male donors')
 
 
 if __name__ == '__main__':
